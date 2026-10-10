@@ -46,27 +46,87 @@ Open a video with subtitles, hover a word, wait ~120 ms.
 | Control | Behaviour |
 | --- | --- |
 | Hover a word | Highlight plus a card with translation, IPA and definitions |
-| Move onto the card | The card stays open so you can read and copy from it |
-| `Esc`, click elsewhere, or scroll | Close |
+| Move onto the card | The card stays open. Words between the caption and the card are crossable, and scrolling inside the card never closes it |
+| **Click a word** | Adds it to your dictionary |
+| **Shift + click** | Collects words without saving; **S** saves them all |
+| **Ctrl + click** | Translates the whole caption line |
+| `Esc` | Closes everything, or clears an active selection |
 | 🔊 Dinle | Speaks the source word via `speechSynthesis` |
-| Kopyala | Copies the translation |
+| Geçmiş | Shows past encounters of that word, inside the card |
 
-The toolbar popup holds the language switch and a per-site CSS selector for
-players that the built-in adapters do not cover.
+The toolbar popup holds the language switch, the timing controls and a per-site
+CSS selector for players the built-in adapters do not cover.
 
 ## Supported sites
 
-Built-in adapters for Netflix (`.player-timedtext`), YouTube
-(`.ytp-caption-segment`), Prime Video
-(`.atvwebplayersdk-captions-overlay`), Disney+, HBO Max and MUBI. On unknown
-sites a generic heuristic looks for `[class*="caption"]`, `[class*="subtitle"]`,
-`[role="caption"]` and similar containers in the lower part of the viewport,
-where subtitles actually are.
+Two layers, because streaming sites differ in kind:
+
+**Hostname adapters** for players that live on a known domain: Netflix
+(`.player-timedtext`), YouTube (`.ytp-caption-segment`), Prime Video
+(`.atvwebplayersdk-captions-overlay`), Disney+, HBO Max and MUBI.
+
+**Embedded-player adapters** for anime and other streaming sites that put a
+third-party player inside an `<iframe>` on a domain of its own. The hostname says
+nothing there, so the player is recognised by its caption markup — and the
+content script reaches inside the frame because it declares `all_frames: true`.
+Aniwatch, HiAnime and most of that family serve **JW Player**, whose captions are
+`.jw-text-track-cue`. Also covered: video.js (`.vjs-text-track-cue`), Shaka
+Player, hls.js, Fluid Player, ArtPlayer and Plyr.
+
+On unknown sites a heuristic looks for `[class*="caption"]`,
+`[class*="subtitle"]`, `[role="caption"]` and similar containers in the lower
+part of the viewport, where subtitles actually are.
 
 For anything else, open the popup → **Bu site için gelişmiş** and paste a
 selector, or set one globally in Options.
 
-## Data sources
+## Sözlüğüm (the library)
+
+Open it from the popup or Options. Three tabs:
+
+- **Kelimeler** — every saved word with its translation, the site it came from,
+  how many times you met it, and whether its review is due. Search, sort by
+  recency / frequency / due date, and export as JSON or CSV (UTF-8 with a BOM, so
+  Excel keeps the Turkish characters).
+- **Tekrar** — a review session. The card shows the word first; reveal the
+  answer, then grade yourself. A word you knew comes back later, a word you
+  missed comes back within the same session. `Space` reveals, `1`/`2` grade.
+  Scheduling is Leitner-style: 1, 3, 7, 16, 35 and 75 days.
+- **Geçmiş** — every word you hovered, newest first, with the option to save one
+  to the dictionary or clear the list.
+
+Lookups are recorded automatically but common words are skipped by default, so a
+film does not fill the list with "the" and "of".
+
+## Keeping it up to date
+
+An extension installed from a store updates itself through the `update_url`
+declared in its manifest. The check built here serves the other case — a manual
+(unpacked) install, where Chrome cannot update anything on its own:
+
+- On install and twice a day, the service worker asks the GitHub Releases API for
+  the newest tag and compares it against `chrome.runtime.getManifest().version`.
+- When it is newer, the toolbar icon gets a **NEW** badge, the popup and the
+  library show a button to the release, and Options shows the date of the last
+  check.
+- A failed check never overwrites the last known release; the previous answer is
+  kept and the error is shown alongside it.
+
+`tools/make-update.mjs` packs the extension, signs it with a persistent key and
+writes the `update.xml` a self-hosted `update_url` needs:
+
+```bash
+bun tools/make-update.mjs --url https://example.com/subtitle-lens/
+# → dist-crx/subtitle-lens.crx
+# → dist-crx/subtitle-lens.pem   (SIGNING KEY — keep it out of the repository)
+# → dist-crx/update.xml
+```
+
+The private key is the identity of the extension: replacing it makes every
+installed copy a different extension. It is written to `dist-crx/`, which is
+gitignored.
+
+## When a lookup fails
 
 | Purpose | Source | Notes |
 | --- | --- | --- |
@@ -116,16 +176,22 @@ is parsed with anchored regexes over the raw response string.
 
 ```
 src/
-  common/settings.js          defaults and the language list, shared by every surface
+  common/
+    settings.js               defaults, language list, common-word list
+    words.js                  word identity, merge rules, review scheduling
+    version.js                version comparison for the update check
   background/service-worker.js
-                              fetch proxy, cache, throttle, providers, Cambridge parser
+                              fetch proxy, cache, throttle, providers, Cambridge
+                              parser, word list, history, update check
   content/
     dom-utils.js              character map, token expansion, rect merging
-    adapters.js               per-site selectors, root resolution, deep shadow query
-    overlay.js                shadow-root markup, highlight boxes, card rendering
-    hover.js                  pointer → word → lookup state machine
+    adapters.js               hostname + embedded-player selectors, root resolution
+    overlay.js                shadow-root markup, highlight, card, line panel
+    hover.js                  pointer → word → lookup / select / translate
     index.js                  entry point
+  library/                    Sözlüğüm: words, review session, history
   popup/  options/            settings surfaces
+tools/make-update.mjs         pack + sign the crx and write update.xml
 build.mjs                     bundles the content script to an IIFE, copies the rest
 ```
 
@@ -165,72 +231,80 @@ The card names what failed, in Turkish, without leaking a provider status code:
 ```bash
 bun build.mjs                             # bundle dist/
 bun run check                             # parse every source file
-bun run test:providers                    # provider failure modes, no browser needed
+bun run test                              # provider + word-list tests, no browser
 bun test/serve.mjs 8123                   # serve the repo (demo player at /test/demo.html)
 ```
 
-End-to-end, in two more terminals:
+End-to-end, with a browser:
 
 ```bash
-powershell -File test/launch-chrome.ps1   # Chrome with CDP on :9222
-bun test/verify.mjs                       # hover, translate, dismiss — 19 checks
-bun test/check-pages.mjs                  # popup, options, service worker — 8 checks
-bun test/verify-ui-errors.mjs             # card wording on failures — 8 checks
+bun run e2e                               # build, restart Chrome, run every browser suite
+bun run e2e -- -Suite interactions        # or just one
 ```
 
-`test/run-e2e.ps1` does the whole chain: build, restart Chrome on a clean
+`test/run-e2e.ps1` does the whole chain: build, stop the *test* browser on a fresh
 profile, install the extension over CDP, verify.
 
-Three things make the harness work, and all of them matter if you touch it:
+### Things that will bite you
 
 - **`--load-extension` is dead.** Branded Chrome builds ignore it since Chrome
   137. The harness installs `dist/` with the CDP `Extensions.loadUnpacked`
-  command instead, which requires `--enable-unsafe-extension-debugging`. The
-  consequence: an unpacked extension is never reloaded from disk, so **every
-  rebuild needs a fresh browser** — which is why `run-e2e.ps1` wipes the profile.
-- **A hidden page stops `requestAnimationFrame`.** The hover pipeline is
-  frame-driven, so a background tab would never process a pointer move. The
-  harness calls `Emulation.setFocusEmulationEnabled`, matching the state a real
-  visible tab is in.
-- **The service worker needs `Target.attachToTarget` with `flatten: true`.**
-  Its `/json/list` entry has no websocket URL, and target ids there go stale
-  when the worker is suspended. Take the id from `Target.getTargets` and attach
-  immediately.
+  command, which requires `--enable-unsafe-extension-debugging`.
+- **A rebuild needs a fresh profile.** Chrome registers an unpacked extension and
+  keeps serving its scripts from that registration, so a stale profile runs stale
+  code even after a successful build. Wiping is not enough on Windows — a profile
+  that was just closed still has locked files — so `launch-chrome.ps1` allocates a
+  new directory (`lens-chrome-<timestamp>`) on every run.
+- **Never `taskkill /IM chrome.exe`.** The user's own browser is almost always
+  running; only processes whose command line contains `lens-chrome-` belong to
+  this harness. Matching on the image name has killed a live user session.
+- **A hidden page stops `requestAnimationFrame`,** and the hover pipeline is
+  frame-driven, so the harness calls `Emulation.setFocusEmulationEnabled`.
+- **The service worker needs `Target.attachToTarget` with `flatten: true`.** Its
+  `/json/list` entry has no websocket URL and ids there go stale when it suspends.
+  Timers and storage are easier to observe from an extension page instead — that
+  is what `verify-interactions.mjs` does.
 
-`test/demo.html` reproduces the two hostile behaviours that matter: the caption
-layer is `pointer-events: none` **and** the cue DOM is rebuilt every 2.5 s. It
-exposes `window.__lensTest` (`pause`, `seek`, `next`, `wordPoint`) so the check
-can aim at a known word and can swap the cue mid-hover on purpose.
+`test/demo.html` reproduces the hostile behaviours that matter: the caption layer
+is `pointer-events: none`, **and** the cue DOM is rebuilt every 2.5 s. It exposes
+`window.__lensTest` (`pause`, `seek`, `next`, `wordPoint`) so a check can aim at a
+known word and swap the cue mid-hover on purpose.
 
 The assertions read the card through `DOM.getDocument { pierce: true }` because
-the overlay lives in a closed shadow root: invisible to page scripts, visible to
-CDP.
+the overlay lives in a **closed** shadow root: invisible to page scripts, visible
+to CDP.
 
-`test/providers.test.mjs` needs none of that. It runs the service worker as a
-plain module with a stubbed `chrome` and a scripted `fetch`, which is how the
-failure paths stay deterministic: no rate limits, no network, no browser.
+`test/providers.test.mjs` and `test/words.test.mjs` need none of that. They run
+the service worker as a plain module with a stubbed `chrome` and a scripted
+`fetch`, which keeps every failure path deterministic: no rate limits, no network,
+no browser.
 
 ## Verified behaviour
 
 | Suite | Scope | Result |
 | --- | --- | --- |
-| `providers.test.mjs` | 429 fallback, service messages, cache rules, Cambridge parsing, input hygiene | **19/19** |
+| `providers.test.mjs` | fallback chains, provider refusals, cache rules, Cambridge parsing, whole-line translation | **25/25** |
+| `words.test.mjs` | word list merge rules, review scheduling, history, update check | **42/42** |
 | `verify.mjs` | hover on a `pointer-events: none` layer in a real Chrome 155 | **19/19** |
 | `check-pages.mjs` | popup, options, service worker | **8/8** |
 | `verify-ui-errors.mjs` | what the card says when providers fail | **8/8** |
+| `verify-interactions.mjs` | reach corridor, transparency, click-to-save, Shift multi-select, Ctrl line translation, library, popup | **43/43** |
 
-What the hover run asserts on `test/demo.html`:
+What the browser runs actually assert:
 
 | Check | Observed |
 | --- | --- |
 | Caption layer is `pointer-events: none` | confirmed before hovering |
 | Cue DOM is rebuilt per word | 12 spans per cue; cue swapped mid-test |
-| Pointer pipeline ran | `{"moves":4,"frames":4,"roots":4,"tokens":1}` |
 | Highlight alignment | highlight `485.8,572.3` vs word `486,572` |
 | Translation | `run /rʌn/ EN koşmak Google` |
 | Cambridge EN→TR | `koşmak, seğirtmek` · `verb` |
+| Pointer crosses the gap to the card | card open through 8 intermediate steps and while resting on it |
+| Click to save | `0 → 1: station`, with translation `istasyon` and the cue as context |
+| Shift + click | `["children"]` → `["children","station"]` → save writes both |
+| Ctrl + click | `Çocuklar tren kalkmadan önce istasyona koşmak zorunda kaldılar.` |
+| Aniwatch / JW Player | player recognised as `jwplayer` inside the iframe; hover resolves `There` in the live cue |
 | Card survives a cue rewrite | word replaced under the card, card intact |
-| `Escape` dismisses | highlight removed |
 | Second lookup | served with the `cached` badge |
 
 Not verified end to end: real Netflix or Prime Video accounts (both need a

@@ -33,6 +33,27 @@ async function init() {
   fillLanguages();
   bind();
   render();
+  await refreshLibraryCount();
+  await refreshUpdateBadge();
+}
+
+/** Rough count so the shortcut reads as a live thing, not a dead link. */
+async function refreshLibraryCount() {
+  const response = await chrome.runtime.sendMessage({ type: "lens:listWords" }).catch(() => null);
+  if (!response?.ok) return;
+  const { total, due } = response.data;
+  $("libraryCount").textContent = due
+    ? `${total} kelime · ${due} tekrar`
+    : `${total} kelime`;
+}
+
+async function refreshUpdateBadge() {
+  const state = await chrome.runtime.sendMessage({ type: "lens:updateState" }).catch(() => null);
+  if (!state?.ok || !state.data.available) return;
+  const badge = $("updateBadge");
+  badge.hidden = false;
+  badge.textContent = `⬆ ${state.data.latest}`;
+  badge.title = `SubtitleLens ${state.data.latest} hazır — tıkla ve indir`;
 }
 
 function fillLanguages() {
@@ -63,6 +84,12 @@ function render() {
     : "Bu sayfada çalışmaz";
   $("hoverDelay").value = String(settings.hoverDelay ?? 120);
   $("hoverDelayOut").textContent = `${settings.hoverDelay ?? 120} ms`;
+  $("gracePeriod").value = String(settings.gracePeriod ?? 420);
+  $("gracePeriodOut").textContent = `${settings.gracePeriod ?? 420} ms`;
+  $("saveOnClick").checked = settings.saveOnClick !== false;
+  $("recordHistory").checked = settings.recordHistory !== false;
+  $("multiSelectOnShift").checked = settings.multiSelectOnShift !== false;
+  $("translateWholeLine").checked = settings.translateWholeLine !== false;
   $("showPhonetic").checked = settings.showPhonetic !== false;
   $("showDefinitions").checked = settings.showDefinitions !== false;
   $("showExamples").checked = settings.showExamples !== false;
@@ -125,6 +152,28 @@ function bind() {
     if (!Object.keys(config).length) delete sites[hostname];
     else sites[hostname] = config;
     save({ sites });
+  });
+
+  $("gracePeriod").addEventListener("input", (event) => {
+    $("gracePeriodOut").textContent = `${event.target.value} ms`;
+  });
+  $("gracePeriod").addEventListener("change", (event) => {
+    save({ gracePeriod: Number(event.target.value) });
+  });
+
+  for (const id of ["saveOnClick", "recordHistory", "multiSelectOnShift", "translateWholeLine"]) {
+    $(id).addEventListener("change", (event) => save({ [id]: event.target.checked }));
+  }
+
+  $("openLibrary").addEventListener("click", () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL("src/library/library.html") });
+    window.close();
+  });
+
+  $("updateBadge").addEventListener("click", async () => {
+    const state = await chrome.runtime.sendMessage({ type: "lens:updateState" }).catch(() => null);
+    const url = state?.data?.releaseUrl || "https://github.com/raksix/subtitle-lens/releases";
+    chrome.tabs.create({ url });
   });
 
   $("openOptions").addEventListener("click", () => {

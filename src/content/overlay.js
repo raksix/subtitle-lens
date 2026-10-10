@@ -19,15 +19,19 @@ export class Overlay {
     this.visible = false;
     this.currentRects = [];
     this.pinned = false;
+    /** Called by the card when the user asks for the word to be saved. */
+    this.onSave = null;
+    this.onSpeak = null;
   }
 
   applySettings(settings) {
     this.settings = settings;
-    if (this.shadow) {
-      this.shadow.querySelector(".root").dataset.theme = resolveTheme(settings.theme);
-      this.host.style.setProperty("--lens-scale", String(settings.fontScale || 1));
-      this.host.style.setProperty("--lens-width", `${settings.cardWidth || 380}px`);
-    }
+    if (!this.shadow) return;
+    this.root.dataset.theme = resolveTheme(settings.theme);
+    this.host.style.setProperty("--lens-scale", String(settings.fontScale || 1));
+    this.host.style.setProperty("--lens-width", `${settings.cardWidth || 380}px`);
+    this.host.style.setProperty("--lens-opacity", String(clampOpacity(settings.cardOpacity)));
+    this.host.style.setProperty("--lens-blur", `${Math.max(0, Number(settings.cardBlur ?? 16))}px`);
   }
 
   mount() {
@@ -43,7 +47,9 @@ export class Overlay {
       "z-index:2147483600",
       "pointer-events:none",
       "--lens-scale:1",
-      "--lens-width:380px"
+      "--lens-width:380px",
+      "--lens-opacity:0.94",
+      "--lens-blur:16px"
     ].join(";");
 
     this.shadow = this.host.attachShadow({ mode: "closed" });
@@ -53,12 +59,17 @@ export class Overlay {
     this.root.dataset.theme = resolveTheme(this.settings.theme);
     this.highlightLayer = this.shadow.querySelector(".lens-highlights");
     this.card = this.shadow.querySelector(".lens-card");
+    this.line = this.shadow.querySelector(".lens-line");
+    this.selectionLayer = null;
+    this.applySettings(this.settings);
 
     this.card.addEventListener("pointerenter", () => {
       this.card.dataset.hovered = "1";
+      this.onEnter?.();
     });
     this.card.addEventListener("pointerleave", () => {
       delete this.card.dataset.hovered;
+      this.onLeave?.();
     });
 
     const attach = () => {
@@ -138,6 +149,147 @@ export class Overlay {
   isPointerOverCard() {
     return Boolean(this.card && this.card.dataset.hovered);
   }
+
+  /**
+   * Small label near the word, shown while the pointer rests so the user knows
+   * a click will save it. Positioned above the word, flipped below when there is
+   * no room.
+   */
+  showHint(anchor, text) {
+    this.mount();
+    const hint = this.shadow.querySelector(".lens-word-hint");
+    if (!hint) return;
+    hint.textContent = text;
+    hint.hidden = false;
+    const rect = hint.getBoundingClientRect();
+    let left = anchor.left + anchor.width / 2 - rect.width / 2;
+    let top = anchor.top - rect.height - 6;
+    if (top < 4) top = anchor.bottom + 6;
+    left = Math.max(6, Math.min(left, window.innerWidth - rect.width - 6));
+    hint.style.left = `${Math.round(left)}px`;
+    hint.style.top = `${Math.round(top)}px`;
+  }
+
+  hideHint() {
+    if (!this.shadow) return;
+    const hint = this.shadow.querySelector(".lens-word-hint");
+    if (hint) hint.hidden = true;
+  }
+
+  /** Confirmation that the click did something, without moving the card. */
+  flashSaved(label = "Sözlüğe eklendi") {
+    if (!this.shadow || !this.card) return;
+    const existing = this.card.querySelector(".lens-save-flash");
+    if (existing) existing.remove();
+    const flash = document.createElement("div");
+    flash.className = "lens-save-flash";
+    flash.textContent = label;
+    this.card.append(flash);
+    setTimeout(() => flash.remove(), 1200);
+  }
+
+  setSaveState(saved) {
+    if (!this.card) return;
+    const button = this.card.querySelector('[data-action="save"]');
+    if (!button) return;
+    button.dataset.saved = saved ? "1" : "0";
+    button.textContent = saved ? "★ Kaydedildi" : "☆ Kaydet";
+    button.title = saved
+      ? "Sözlükten çıkarmak için tıkla"
+      : "Kelimeyi sözlüğe eklemek için tıkla";
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Multi-select                                                      */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Paint the collected words. They are drawn on the same layer as the hover
+   * highlight but with the `selected` class, so one word can be both.
+   */
+  renderSelection(entries) {
+    this.mount();
+    if (!this.selectionLayer) {
+      this.selectionLayer = document.createElement("div");
+      this.selectionLayer.className = "lens-selection-layer";
+      this.highlightLayer.after(this.selectionLayer);
+    }
+    this.selectionLayer.replaceChildren(
+      ...entries.flatMap((entry) =>
+        (entry.rects || []).map((rect) => {
+          const box = document.createElement("div");
+          box.className = "lens-highlight selected";
+          box.style.left = `${rect.left}px`;
+          box.style.top = `${rect.top}px`;
+          box.style.width = `${rect.width}px`;
+          box.style.height = `${rect.height}px`;
+          return box;
+        })
+      )
+    );
+  }
+
+  clearSelection() {
+    if (this.selectionLayer) this.selectionLayer.replaceChildren();
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Whole-line translation                                            */
+  /* ---------------------------------------------------------------- */
+
+  /** Draw the translation of a caption over the caption itself. */
+  showLine(anchorLine, { source, text, provider, pending, error }) {
+    this.mount();
+    const node = this.line;
+    node.hidden = false;
+    node.replaceChildren();
+
+    const source_ = document.createElement("div");
+    source_.className = "lens-line-source";
+    source_.textContent = source;
+    node.append(source_);
+
+    const body = document.createElement("div");
+    body.className = "lens-line-text";
+    body.textContent = pending ? "Çevriliyor…" : error ? error : text;
+    if (error) body.style.color = "var(--error, #ff8f8f)";
+    node.append(body);
+
+    const foot = document.createElement("div");
+    foot.className = "lens-line-foot";
+    foot.append(document.createTextNode(provider || ""));
+    const spacer = document.createElement("span");
+    spacer.style.marginLeft = "auto";
+    foot.append(spacer);
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "Kapat (Esc)";
+    close.style.cssText =
+      "all:unset;cursor:pointer;border:1px solid var(--border);border-radius:6px;padding:2px 7px;color:var(--muted)";
+    close.addEventListener("click", () => this.onLineClose?.());
+    foot.append(close);
+    node.append(foot);
+
+    // Sit over the caption, clamped into the viewport.
+    const rect = node.getBoundingClientRect();
+    let top = anchorLine.top - rect.height - 10;
+    if (top < 8) top = Math.min(anchorLine.bottom + 10, window.innerHeight - rect.height - 8);
+    const left = Math.max(
+      8,
+      Math.min(
+        anchorLine.left + anchorLine.width / 2 - rect.width / 2,
+        window.innerWidth - rect.width - 8
+      )
+    );
+    node.style.left = `${Math.round(left)}px`;
+    node.style.top = `${Math.round(Math.max(8, top))}px`;
+  }
+
+  hideLine() {
+    if (!this.line) return;
+    this.line.hidden = true;
+    this.line.replaceChildren();
+  }
 }
 
 function resolveTheme(theme) {
@@ -145,12 +297,21 @@ function resolveTheme(theme) {
   return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
+/** Keep the card readable: too low an opacity makes text sit on raw video. */
+function clampOpacity(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0.94;
+  return Math.min(1, Math.max(0.55, number));
+}
+
 function buildMarkup() {
   return `
 <style>
   :host { all: initial; }
   .root {
-    --bg: rgba(18, 20, 26, 0.97);
+    /* Opacity and blur are driven by --lens-opacity / --lens-blur, set on the
+       host from settings, so the video shows through the card. */
+    --bg-solid: 18, 20, 26;
     --bg-soft: rgba(255, 255, 255, 0.06);
     --fg: #eef1f7;
     --muted: #a3adc2;
@@ -160,13 +321,13 @@ function buildMarkup() {
     --hl: rgba(255, 214, 102, 0.30);
     --hl-underline: rgba(255, 214, 102, 0.85);
     --shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+    --bg: rgba(18, 20, 26, var(--lens-opacity, 0.94));
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     font-size: calc(14px * var(--lens-scale));
     line-height: 1.45;
     color: var(--fg);
   }
   .root[data-theme="light"] {
-    --bg: rgba(255, 255, 255, 0.98);
     --bg-soft: rgba(0, 0, 0, 0.04);
     --fg: #16181d;
     --muted: #5b6478;
@@ -176,6 +337,7 @@ function buildMarkup() {
     --hl: rgba(255, 196, 0, 0.35);
     --hl-underline: rgba(214, 148, 0, 0.9);
     --shadow: 0 16px 40px rgba(15, 23, 42, 0.22);
+    --bg: rgba(255, 255, 255, var(--lens-opacity, 0.94));
   }
 
   .lens-highlights { position: fixed; inset: 0; pointer-events: none; }
@@ -201,7 +363,10 @@ function buildMarkup() {
     border: 1px solid var(--border);
     border-radius: 12px;
     box-shadow: var(--shadow);
-    backdrop-filter: blur(14px);
+    /* Both prefixed forms: Chrome accepts the plain one, but a host page can
+       force a stacking context that needs the prefixed property on some GPUs. */
+    backdrop-filter: blur(var(--lens-blur, 16px)) saturate(1.2);
+    -webkit-backdrop-filter: blur(var(--lens-blur, 16px)) saturate(1.2);
     padding: 12px 14px 10px;
     pointer-events: auto;
     box-sizing: border-box;
@@ -250,6 +415,7 @@ function buildMarkup() {
     padding-left: 9px; border-left: 2px solid var(--border); word-break: break-word;
   }
   .lens-def-pos { color: var(--accent); font-weight: 600; margin-right: 4px; }
+  .lens-muted { color: var(--muted); font-style: italic; }
   .lens-alt { display: flex; flex-wrap: wrap; gap: 5px; }
   .lens-alt-chip {
     background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px;
@@ -282,9 +448,80 @@ function buildMarkup() {
   }
   .lens-foot button:hover { color: var(--fg); border-color: var(--accent); }
   .lens-foot .brand { margin-left: auto; opacity: 0.75; }
+
+  /* Saving is a two-way state: the button reports whether the word is in the
+     list, so a second click can read as "already saved" instead of duping. */
+  .lens-foot button[data-saved="1"] {
+    color: var(--accent); border-color: var(--accent); background: var(--accent-soft);
+  }
+  .lens-foot button[data-busy="1"] { opacity: 0.6; pointer-events: none; }
+
+  .lens-save-flash {
+    position: absolute; right: 10px; top: 8px;
+    font-size: 0.7em; letter-spacing: 0.04em;
+    color: var(--accent); background: var(--accent-soft);
+    border: 1px solid var(--accent); border-radius: 999px;
+    padding: 2px 8px; pointer-events: none;
+    animation: lens-flash 1.1s ease-out forwards;
+  }
+  @keyframes lens-flash {
+    0% { opacity: 0; transform: translateY(-3px); }
+    18% { opacity: 1; transform: none; }
+    75% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  /* The hint that appears when the pointer rests on a word. */
+  .lens-word-hint {
+    position: fixed; pointer-events: none;
+    font-size: calc(11px * var(--lens-scale));
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--fg); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 2px 7px; white-space: nowrap;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  }
+
+  /* Words collected with Shift belong to a different action than the single
+     hover highlight, so they read in the accent colour. */
+  .lens-highlight.selected {
+    background: var(--accent-soft);
+    border-bottom-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+
+  /* The whole caption, translated. It needs to sit over the caption rather than
+     next to it: there is no room beside a video. */
+  .lens-line {
+    position: fixed; pointer-events: auto;
+    max-width: min(80vw, 900px);
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 10px 13px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(var(--lens-blur, 16px));
+    -webkit-backdrop-filter: blur(var(--lens-blur, 16px));
+    font-size: calc(16px * var(--lens-scale));
+    line-height: 1.4;
+    animation: lens-card-in 110ms ease-out;
+  }
+  .lens-line .lens-line-source {
+    color: var(--muted); font-size: 0.78em; margin-bottom: 4px;
+    direction: auto;
+  }
+  .lens-line .lens-line-text { font-weight: 600; color: var(--accent); direction: auto; }
+  .lens-line .lens-line-foot {
+    margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--border);
+    display: flex; gap: 8px; align-items: center;
+    font-size: 0.66em; color: var(--muted);
+  }
 </style>
 <div class="root" data-theme="dark">
   <div class="lens-highlights"></div>
+  <div class="lens-word-hint" hidden></div>
+  <div class="lens-line" hidden></div>
   <div class="lens-card" hidden></div>
 </div>`;
 }
@@ -487,6 +724,11 @@ export function renderResult(card, data, settings) {
   foot.append(
     el(
       "button",
+      { type: "button", "data-action": "save", title: "Kelimeyi sözlüğe ekle" },
+      "☆ Kaydet"
+    ),
+    el(
+      "button",
       { type: "button", "data-action": "speak", title: "Telaffuzu dinle" },
       "🔊 Dinle"
     ),
@@ -495,6 +737,11 @@ export function renderResult(card, data, settings) {
       { type: "button", "data-action": "copy", title: "Çeviriyi kopyala" },
       "Kopyala"
     ),
+    el(
+      "button",
+      { type: "button", "data-action": "history", title: "Bu kelimenin geçmişteki halleri" },
+      "Geçmiş"
+    ),
     el("span", { class: "brand" }, "SubtitleLens")
   );
   nodes.push(foot);
@@ -502,7 +749,7 @@ export function renderResult(card, data, settings) {
   card.replaceChildren(...nodes);
 }
 
-function section(title, body) {
+export function section(title, body) {
   return el(
     "div",
     { class: "lens-section" },
@@ -539,6 +786,24 @@ function explainFailures(failed, errors) {
   if (/word-too-long/.test(all)) return "Kelime çok uzun.";
   if (/not-a-word/.test(all)) return "Bu bir kelime değil.";
   return `${joined} sonucu alınamadı.`;
+}
+
+/**
+ * Explain a failed whole-line translation. The line request has no dictionary
+ * fallback, so a rate limit is the one worth naming precisely.
+ */
+export function humanizeLineError(message) {
+  const text = String(message || "");
+  if (/429|rate|too many/i.test(text)) {
+    return "Çeviri şu an sınırda. Birkaç saniye sonra tekrar deneyin.";
+  }
+  if (/context invalidated|Receiving end does not exist/i.test(text)) {
+    return "Eklenti güncellendi. Sayfayı yenileyin (F5).";
+  }
+  if (/Failed to fetch|NetworkError|network/i.test(text)) {
+    return "Ağ hatası: bağlantınızı kontrol edin.";
+  }
+  return `Çeviri alınamadı (${text || "bilinmeyen hata"}).`;
 }
 
 function humanizeError(message) {

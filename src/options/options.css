@@ -125,5 +125,18 @@ button {
 button:hover { border-color: var(--accent); color: var(--accent); }
 button.danger { border-color: var(--danger); color: var(--danger); }
 button.danger:hover { background: var(--danger); color: var(--card); }
+button.linkish {
+  all: unset;
+  cursor: pointer;
+  color: var(--accent);
+  padding: 4px 2px;
+}
+button.linkish:hover { text-decoration: underline; }
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+button.primary:hover { color: #fff; filter: brightness(1.08); }
 
 footer { color: var(--muted); font-size: 12px; max-width: 70ch; }

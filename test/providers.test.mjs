@@ -24,7 +24,19 @@ let syncSettings = {};
 globalThis.chrome = {
   runtime: {
     onMessage: { addListener: (fn) => messageListeners.push(fn) },
-    onInstalled: { addListener: () => {} }
+    onInstalled: { addListener: () => {} },
+    onStartup: { addListener: () => {} },
+    getManifest: () => ({ version: "1.0.1" })
+  },
+  alarms: {
+    onAlarm: { addListener: () => {} },
+    create: () => {},
+    clear: async () => true
+  },
+  action: {
+    setBadgeText: async () => {},
+    setBadgeBackgroundColor: async () => {},
+    setTitle: async () => {}
   },
   storage: {
     sync: {
@@ -83,6 +95,16 @@ const record = (needle, handler) => {
 /* ------------------------------------------------------------------ */
 
 await import("../src/background/service-worker.js");
+
+/** The whole-line request; its payload carries text, not word. */
+const translateLine = (text, extra = {}) =>
+  new Promise((resolve) => {
+    messageListeners[0](
+      { type: "lens:translate", payload: { text, targetLang: "tr", sourceLang: "en", ...extra } },
+      null,
+      resolve
+    );
+  });
 
 const query = (word, extra = {}) =>
   new Promise((resolve) => {
@@ -314,6 +336,41 @@ check(
   !/<a |<\/a>/.test(cam.cambridge?.senses?.[0]?.examples?.[0] || "<none>"),
   cam.cambridge?.senses?.[0]?.examples?.[0]
 );
+
+/* ------------------------------------------------------------------ */
+/* 7b. Whole-line translation                                           */
+/* ------------------------------------------------------------------ */
+
+const SENTENCE = "The children had to run to the station before the train left.";
+reset({
+  script: {
+    [GOOGLE_PRIMARY]: () => JSON_OK([[[`Çocuklar tren kalkmadan önce istasyona koşmak zorunda kaldı.`, SENTENCE, null, null, 10]], null, "en", null, null, null, null, []]),
+    [FREEDICT]: () => STATUS(200),
+    [WIKTIONARY]: () => STATUS(200),
+    [CAMBRIDGE]: () => STATUS(404)
+  }
+});
+const line = (await translateLine(SENTENCE)).data;
+check(
+  "a whole sentence is translated, not treated as a word",
+  /Çocuklar/.test(line.text || ""),
+  line.text
+);
+check("the line answer reports its provider", line.provider === "google", line.provider);
+check("the line answer echoes the source", line.source === SENTENCE);
+
+/* A sentence must not be rejected by the single-word length guard. */
+check("a sentence survives the word-length guard", SENTENCE.length > 60 && /Çocuklar/.test(line.text));
+
+/* Cached on the second call. */
+const lineCallsBefore = calls.length;
+const lineAgain = (await translateLine(SENTENCE)).data;
+check("a repeated line is served from cache", lineAgain.cached === true && calls.length === lineCallsBefore, `cached=${lineAgain.cached}`);
+
+/* An empty payload is refused rather than sent upstream. */
+reset({ script: { [GOOGLE_PRIMARY]: () => JSON_OK(googleBody("x")), [FREEDICT]: () => STATUS(200), [WIKTIONARY]: () => STATUS(200), [CAMBRIDGE]: () => STATUS(404) } });
+const emptyLine = await translateLine("   ");
+check("an empty line is rejected", emptyLine.ok === false && /empty-text/.test(emptyLine.error), emptyLine.error);
 
 /* ------------------------------------------------------------------ */
 /* 8. Input hygiene                                                     */

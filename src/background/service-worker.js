@@ -9,7 +9,19 @@
  * "lens:query" and a `{ word, sourceLang, targetLang, hints }` payload.
  */
 
-import { DEFAULT_SETTINGS } from "../common/settings.js";
+import { DEFAULT_SETTINGS, COMMON_WORDS } from "../common/settings.js";
+import {
+  byRecency,
+  dueWords,
+  isRecordable,
+  KEYS,
+  MAX_WORDS,
+  mergeWordEntry,
+  scheduleReview,
+  trimWords,
+  wordKey
+} from "../common/words.js";
+import { isNewer, pickExtensionAsset } from "../common/version.js";
 
 /**
  * Google exposes the same response shape from more than one host. The primary
@@ -51,6 +63,8 @@ const THROTTLE = {
 
 const MIN_WORD_LENGTH = 1;
 const MAX_WORD_LENGTH = 60;
+/** Subtitles are short; this only stops a runaway selection. */
+const MAX_LINE_LENGTH = 500;
 /** Latin letters, digits and the apostrophes/accents dictionaries actually use. */
 const WORD_RE = /^[\p{L}\p{N}][\p{L}\p{N}'’\-.]*$/u;
 
@@ -61,9 +75,9 @@ const lastCall = new Map();
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message !== "object") return false;
 
-  if (message.type === "lens:query") {
-    handleQuery(message.payload)
-      .then((result) => sendResponse({ ok: true, data: result }))
+  const respond = (promise) => {
+    promise
+      .then((data) => sendResponse({ ok: true, data }))
       .catch((error) =>
         sendResponse({
           ok: false,
@@ -71,23 +85,42 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         })
       );
     return true; // async response
-  }
+  };
 
-  if (message.type === "lens:clearCache") {
-    clearCache()
-      .then((removed) => sendResponse({ ok: true, removed }))
-      .catch((error) => sendResponse({ ok: false, error: String(error) }));
-    return true;
+  switch (message.type) {
+    case "lens:query":
+      return respond(handleQuery(message.payload));
+    case "lens:translate":
+      return respond(handleTranslate(message.payload));
+    case "lens:clearCache":
+      return respond(clearCache().then((removed) => ({ removed })));
+    case "lens:cacheStats":
+      return respond(cacheStats());
+    case "lens:saveWord":
+      return respond(saveWord(message.payload));
+    case "lens:removeWord":
+      return respond(removeWord(message.payload));
+    case "lens:listWords":
+      return respond(listWords());
+    case "lens:reviewWord":
+      return respond(reviewWord(message.payload));
+    case "lens:history":
+      return respond(getHistory(message.payload));
+    case "lens:clearHistory":
+      return respond(clearHistory());
+    case "lens:forgetWord":
+      return respond(forgetWord(message.payload));
+    case "lens:checkUpdate":
+      // The flag arrives on the payload from the library and options pages;
+      // the top-level form is kept for a plain call from the popup.
+      return respond(
+        checkUpdate({ force: Boolean(message.payload?.force ?? message.force) })
+      );
+    case "lens:updateState":
+      return respond(getUpdateState());
+    default:
+      return false;
   }
-
-  if (message.type === "lens:cacheStats") {
-    cacheStats()
-      .then((stats) => sendResponse({ ok: true, data: stats }))
-      .catch((error) => sendResponse({ ok: false, error: String(error) }));
-    return true;
-  }
-
-  return false;
 });
 
 /* ------------------------------------------------------------------ */
@@ -150,6 +183,291 @@ async function cacheStats() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Saved words and history                                            */
+/* ------------------------------------------------------------------ */
+
+const HISTORY_KEY = KEYS.history;
+const WORDS_KEY = KEYS.words;
+
+/** Consecutive hovers on the same word (Netflix re-renders) count once. */
+const HISTORY_DEDUPE_WINDOW_MS = 20000;
+
+let wordWriteQueue = Promise.resolve();
+
+/** Serialise read-modify-write so two tabs cannot clobber each other's list. */
+function withWords(mutator) {
+  const run = async () => {
+    const store = await chrome.storage.local.get(WORDS_KEY);
+    const words = Array.isArray(store[WORDS_KEY]) ? store[WORDS_KEY] : [];
+    const { words: next, result } = await mutator(words);
+    if (next) {
+      await chrome.storage.local.set({ [WORDS_KEY]: trimWords(next, MAX_WORDS) });
+    }
+    return result;
+  };
+  const queued = wordWriteQueue.then(run, run);
+  // Keep the chain alive even if this mutation rejects.
+  wordWriteQueue = queued.catch(() => {});
+  return queued;
+}
+
+async function listWords() {
+  const store = await chrome.storage.local.get(WORDS_KEY);
+  const words = Array.isArray(store[WORDS_KEY]) ? store[WORDS_KEY] : [];
+  const now = Date.now();
+  return {
+    words: byRecency(words),
+    total: words.length,
+    due: dueWords(words, now).length
+  };
+}
+
+async function saveWord(payload) {
+  const word = String(payload?.word || "").trim();
+  if (!word) throw new Error("empty-word");
+
+  return withWords((words) => {
+    const key = wordKey(word);
+    const index = words.findIndex((entry) => entry.key === key);
+    const entry = mergeWordEntry(
+      index === -1 ? null : words[index],
+      {
+        word,
+        translation: payload.translation,
+        phonetic: payload.phonetic,
+        sourceLang: payload.sourceLang,
+        targetLang: payload.targetLang,
+        definition: payload.definition,
+        site: payload.site,
+        cue: payload.cue
+      }
+    );
+
+    const next = index === -1 ? [entry, ...words] : words.map((item, i) => (i === index ? entry : item));
+    return { words: next, result: { entry, added: index === -1, total: next.length } };
+  });
+}
+
+async function removeWord(payload) {
+  const key = wordKey(payload?.key || payload?.word);
+  if (!key) throw new Error("empty-word");
+  return withWords((words) => {
+    const next = words.filter((entry) => entry.key !== key);
+    return { words: next, result: { removed: words.length - next.length, total: next.length } };
+  });
+}
+
+async function reviewWord(payload) {
+  const key = wordKey(payload?.key || payload?.word);
+  if (!key) throw new Error("empty-word");
+  return withWords((words) => {
+    const index = words.findIndex((entry) => entry.key === key);
+    if (index === -1) return { words: null, result: { entry: null, total: words.length } };
+    const entry = scheduleReview(words[index], payload?.grade);
+    const next = words.map((item, i) => (i === index ? entry : item));
+    return { words: next, result: { entry, total: next.length } };
+  });
+}
+
+async function getHistory({ limit = 200, query = "" } = {}) {
+  const store = await chrome.storage.local.get(HISTORY_KEY);
+  const history = Array.isArray(store[HISTORY_KEY]) ? store[HISTORY_KEY] : [];
+  const needle = String(query || "").trim().toLowerCase();
+  const filtered = needle
+    ? history.filter(
+        (entry) =>
+          entry.word.toLowerCase().includes(needle) ||
+          String(entry.translation || "").toLowerCase().includes(needle)
+      )
+    : history;
+  return { entries: filtered.slice(0, limit), total: history.length };
+}
+
+async function clearHistory() {
+  const store = await chrome.storage.local.get(HISTORY_KEY);
+  const count = Array.isArray(store[HISTORY_KEY]) ? store[HISTORY_KEY].length : 0;
+  await chrome.storage.local.remove(HISTORY_KEY);
+  return { cleared: count };
+}
+
+/** Drop a word from the history without touching the saved list. */
+async function forgetWord(payload) {
+  const key = wordKey(payload?.key || payload?.word);
+  if (!key) throw new Error("empty-word");
+  const store = await chrome.storage.local.get(HISTORY_KEY);
+  const history = Array.isArray(store[HISTORY_KEY]) ? store[HISTORY_KEY] : [];
+  const next = history.filter((entry) => wordKey(entry.word) !== key);
+  await chrome.storage.local.set({ [HISTORY_KEY]: next });
+  return { removed: history.length - next.length };
+}
+
+/**
+ * Record that a word was looked up. Deliberately fire-and-forget: the card must
+ * render even if storage is unavailable, so failures are swallowed.
+ */
+async function recordHistory(word, result, settings) {
+  if (settings.recordHistory === false) return;
+  if (
+    !isRecordable(word, {
+      minLength: settings.historyMinLength ?? 2,
+      ignoreCommon: settings.historyIgnoreCommon !== false,
+      common: COMMON_WORDS
+    })
+  ) {
+    return;
+  }
+
+  try {
+    const store = await chrome.storage.local.get(HISTORY_KEY);
+    const history = Array.isArray(store[HISTORY_KEY]) ? store[HISTORY_KEY] : [];
+    const now = Date.now();
+    const last = history[0];
+    const key = wordKey(word);
+
+    // The same word hovered twice in a row is one event, not two. The entry is
+    // replaced rather than mutated: an in-memory edit is lost when the storage
+    // layer round-trips a serialised copy.
+    if (last && wordKey(last.word) === key && now - (last.at || 0) < HISTORY_DEDUPE_WINDOW_MS) {
+      const merged = { ...last, at: now, count: (last.count || 1) + 1 };
+      await chrome.storage.local.set({ [HISTORY_KEY]: [merged, ...history.slice(1)] });
+      return;
+    }
+
+    const limit = Math.max(20, Math.min(settings.historyLimit ?? 400, 5000));
+    const entry = {
+      word: result?.word || word,
+      translation: result?.translation?.text || "",
+      phonetic: result?.translation?.phonetic || "",
+      targetLang: result?.targetLang || settings.targetLang || "",
+      sourceLang: result?.sourceLang || "",
+      url: "",
+      at: now,
+      count: 1
+    };
+    const next = [entry, ...history].slice(0, limit);
+    await chrome.storage.local.set({ [HISTORY_KEY]: next });
+  } catch {
+    /* history is best-effort */
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Update check                                                       */
+/* ------------------------------------------------------------------ */
+
+const RELEASES_API =
+  "https://api.github.com/repos/raksix/subtitle-lens/releases/latest";
+const UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const UPDATE_ALARM = "lens:update-check";
+
+async function getUpdateState() {
+  const store = await chrome.storage.local.get(KEYS.update);
+  const current = chrome.runtime.getManifest().version;
+  const state = store[KEYS.update] || null;
+  return {
+    current,
+    latest: state?.version || current,
+    available: Boolean(state?.version) && isNewer(state.version, current),
+    checkedAt: state?.checkedAt || 0,
+    releaseUrl: state?.releaseUrl || "",
+    assetUrl: state?.assetUrl || "",
+    notes: state?.notes || "",
+    error: state?.error || ""
+  };
+}
+
+/**
+ * Ask GitHub for the newest release and remember the answer.
+ *
+ * A packaged extension updates itself through `update_url`; this check exists
+ * for the unpacked install, where Chrome cannot update anything on its own, and
+ * to tell the user *why* they should update.
+ */
+async function checkUpdate({ force = false } = {}) {
+  const current = chrome.runtime.getManifest().version;
+  const store = await chrome.storage.local.get(KEYS.update);
+  const previous = store[KEYS.update] || null;
+
+  if (
+    !force &&
+    previous?.checkedAt &&
+    Date.now() - previous.checkedAt < UPDATE_CHECK_INTERVAL_MS
+  ) {
+    return getUpdateState();
+  }
+
+  try {
+    await throttle("dictionary");
+    const response = await fetch(RELEASES_API, {
+      credentials: "omit",
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": `SubtitleLens/${current}`
+      }
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const release = await response.json();
+
+    const version = String(release.tag_name || release.name || "").replace(/^v/i, "");
+    const asset = pickExtensionAsset(release.assets);
+    const state = {
+      version,
+      checkedAt: Date.now(),
+      releaseUrl: release.html_url || "",
+      assetUrl: asset?.browser_download_url || "",
+      notes: String(release.body || "").slice(0, 2000),
+      error: ""
+    };
+    await chrome.storage.local.set({ [KEYS.update]: state });
+    await refreshUpdateBadge();
+    return getUpdateState();
+  } catch (error) {
+    // A failed check must not erase the last known release.
+    const state = { ...(previous || {}), checkedAt: Date.now(), error: String(error.message || error) };
+    await chrome.storage.local.set({ [KEYS.update]: state });
+    await refreshUpdateBadge();
+    return getUpdateState();
+  }
+}
+
+/** Badge the toolbar icon when a newer release exists. */
+async function refreshUpdateBadge() {
+  try {
+    const state = await getUpdateState();
+    if (state.available) {
+      await chrome.action.setBadgeText({ text: "NEW" });
+      await chrome.action.setBadgeBackgroundColor({ color: "#1f6feb" });
+      await chrome.action.setTitle({
+        title: `SubtitleLens — ${state.latest} sürümü hazır`
+      });
+    } else {
+      await chrome.action.setBadgeText({ text: "" });
+      await chrome.action.setTitle({ title: "SubtitleLens" });
+    }
+  } catch {
+    /* the action API is unavailable in some contexts */
+  }
+}
+
+function scheduleUpdateCheck() {
+  chrome.alarms.create(UPDATE_ALARM, {
+    periodInMinutes: 12 * 60,
+    delayInMinutes: 1
+  });
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== UPDATE_ALARM) return;
+  loadSettings()
+    .then((stored) => {
+      const settings = { ...DEFAULT_SETTINGS, ...stored };
+      if (settings.autoUpdateCheck === false) return null;
+      return checkUpdate();
+    })
+    .catch(() => {});
+});
+
+/* ------------------------------------------------------------------ */
 /* Query orchestration                                                */
 /* ------------------------------------------------------------------ */
 
@@ -166,7 +484,13 @@ async function handleQuery(payload) {
 
   const key = cacheKey(word, sourceLang, targetLang, wantsDictionary, wantsCambridge);
   const cached = await readCache(key);
-  if (cached) return { ...cached, cached: true };
+  if (cached) {
+    // A cache hit is still a lookup the user performed, and revisiting a word
+    // is the common case. Skipping the record here would leave the history
+    // showing only first encounters.
+    recordHistory(word, cached, settings);
+    return { ...cached, cached: true };
+  }
 
   if (inflight.has(key)) return inflight.get(key);
 
@@ -202,7 +526,52 @@ async function handleQuery(payload) {
       // is cached with a short TTL so a transient outage cannot pin a word.
       await writeCache(key, result);
     }
+    // Fire and forget: the card must render even if storage is unavailable.
+    recordHistory(word, result, settings);
     return result;
+  })().finally(() => inflight.delete(key));
+
+  inflight.set(key, task);
+  return task;
+}
+
+/**
+ * Translate a whole subtitle line.
+ *
+ * Deliberately separate from `handleQuery`: that path normalises its input to a
+ * single headword and rejects anything longer, which is right for a hovered word
+ * and wrong for a sentence.
+ */
+async function handleTranslate(payload) {
+  const text = String(payload?.text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_LINE_LENGTH);
+  if (!text) throw new Error("empty-text");
+
+  const settings = { ...DEFAULT_SETTINGS, ...(await loadSettings()) };
+  const targetLang = payload?.targetLang || settings.targetLang;
+  const sourceLang = payload?.sourceLang || settings.sourceLang || "auto";
+
+  const key = `lens:cache:line|${text}|${sourceLang}|${targetLang}|-|-`;
+  const cached = await readCache(key);
+  if (cached) return { ...cached, cached: true };
+  if (inflight.has(key)) return inflight.get(key);
+
+  const task = (async () => {
+    const result = await translate(text, sourceLang, targetLang, settings);
+    const value = {
+      word: text,
+      source: text,
+      text: result.text,
+      provider: result.provider,
+      sourceLang: result.sourceLang || sourceLang,
+      detectedLang: result.detectedLang || null,
+      targetLang,
+      at: Date.now()
+    };
+    await writeCache(key, value);
+    return value;
   })().finally(() => inflight.delete(key));
 
   inflight.set(key, task);
@@ -681,4 +1050,12 @@ chrome.runtime.onInstalled.addListener(() => {
       chrome.storage.sync.set({ targetLang: DEFAULT_SETTINGS.targetLang });
     }
   });
+  scheduleUpdateCheck();
+  refreshUpdateBadge();
+});
+
+/* Brave and some Chromium builds fire this when the browser starts. */
+chrome.runtime.onStartup?.addListener(() => {
+  scheduleUpdateCheck();
+  refreshUpdateBadge();
 });

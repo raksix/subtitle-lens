@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SubtitleLens · Sözlüğüm</title>
+    <link rel="stylesheet" href="library.css" />
+  </head>
+  <body>
+    <main>
+      <header class="head">
+        <div class="brand">
+          <span class="logo">SL</span>
+          <div>
+            <h1>Sözlüğüm</h1>
+            <p id="summary" class="muted">—</p>
+          </div>
+        </div>
+        <nav class="tabs" role="tablist">
+          <button role="tab" data-tab="browse" aria-selected="true">Kelimeler</button>
+          <button role="tab" data-tab="review" aria-selected="false">Tekrar</button>
+          <button role="tab" data-tab="history" aria-selected="false">Geçmiş</button>
+        </nav>
+      </header>
+
+      <section id="panel-update" class="banner" hidden></section>
+
+      <!-- Words ------------------------------------------------------- -->
+      <section class="panel" data-panel="browse">
+        <div class="toolbar">
+          <input type="search" id="filter" placeholder="Kelime veya çeviri ara…" />
+          <select id="sort">
+            <option value="recent">En yeni</option>
+            <option value="oldest">En eski</option>
+            <option value="seen">En çok karşılaşılan</option>
+            <option value="alpha">A → Z</option>
+            <option value="due">Tekrar zamanı gelenler</option>
+          </select>
+          <button id="exportJson" type="button">JSON indir</button>
+          <button id="exportCsv" type="button">CSV indir</button>
+        </div>
+        <div id="wordList" class="list"></div>
+      </section>
+
+      <!-- Review ------------------------------------------------------ -->
+      <section class="panel" data-panel="review" hidden>
+        <div id="reviewSetup" class="center">
+          <p class="muted" id="reviewCount">—</p>
+          <div class="row">
+            <button id="startReview" class="primary" type="button">Tekrara başla</button>
+            <label class="check">
+              <input type="checkbox" id="reviewAll" />
+              <span>Vadesi gelmemiş kelimeleri de karıştır</span>
+            </label>
+          </div>
+          <p class="hint">
+            Kartı gör, hatırlamaya çalış, sonra kendini değerlendir. Doğru bildiğin
+            kelime daha uzun aralıklarla, bilemediğin hemen geri gelir.
+          </p>
+        </div>
+
+        <div id="reviewCard" class="flash" hidden>
+          <div class="flash-progress"><span id="flashIndex">1</span> / <span id="flashTotal">1</span></div>
+          <div class="flash-front" id="flashFront">—</div>
+          <div class="flash-meta">
+            <span id="flashPhonetic" class="muted"></span>
+            <span id="flashSite" class="badge"></span>
+          </div>
+          <div class="flash-back" id="flashBack" hidden>
+            <div class="flash-translation" id="flashTranslation">—</div>
+            <div class="flash-definition muted" id="flashDefinition"></div>
+            <div class="flash-cue muted" id="flashCue"></div>
+          </div>
+          <div class="flash-actions">
+            <button id="revealCard" class="primary" type="button">Cevabı göster</button>
+            <div id="gradeActions" class="row" hidden>
+              <button id="gradeAgain" class="danger" type="button">Bilemedim</button>
+              <button id="gradeGood" class="good" type="button">Biliyordum</button>
+            </div>
+          </div>
+          <div class="flash-foot">
+            <button id="speakCard" class="link" type="button">🔊 Dinle</button>
+            <button id="stopReview" class="link" type="button">Bitir</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- History ----------------------------------------------------- -->
+      <section class="panel" data-panel="history" hidden>
+        <div class="toolbar">
+          <input type="search" id="historyFilter" placeholder="Geçmişte ara…" />
+          <button id="clearHistory" class="danger" type="button">Geçmişi temizle</button>
+        </div>
+        <div id="historyList" class="list"></div>
+      </section>
+    </main>
+
+    <template id="wordRow">
+      <div class="row-item">
+        <div class="row-main">
+          <div class="row-head">
+            <span class="row-word"></span>
+            <span class="row-phonetic muted"></span>
+            <span class="row-badge badge"></span>
+          </div>
+          <div class="row-translation"></div>
+          <div class="row-definition muted"></div>
+        </div>
+        <div class="row-side">
+          <span class="row-count muted"></span>
+          <button class="row-remove" type="button" title="Listeden çıkar">✕</button>
+        </div>
+      </div>
+    </template>
+
+    <script type="module" src="library.js"></script>
+  </body>
+</html>

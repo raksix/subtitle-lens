@@ -24,6 +24,7 @@ const STATIC = [
   "src/common",
   "src/popup",
   "src/options",
+  "src/library",
   "icons"
 ];
 

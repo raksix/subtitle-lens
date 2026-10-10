@@ -1,6 +1,6 @@
 {
   "name": "subtitle-lens",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Hover any word in video subtitles to get translation, IPA and Cambridge definitions.",
@@ -13,7 +13,10 @@
     "verify": "bun test/verify.mjs",
     "verify:pages": "bun test/check-pages.mjs",
     "verify:errors": "bun test/verify-ui-errors.mjs",
-    "e2e": "powershell -NoProfile -ExecutionPolicy Bypass -File test/run-e2e.ps1"
+    "e2e": "powershell -NoProfile -ExecutionPolicy Bypass -File test/run-e2e.ps1",
+    "test:words": "bun test/words.test.mjs",
+    "test": "bun test/providers.test.mjs && bun test/words.test.mjs",
+    "update:pack": "bun tools/make-update.mjs"
   },
   "engines": {
     "bun": ">=1.1.0"

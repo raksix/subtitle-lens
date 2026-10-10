@@ -66,6 +66,21 @@
             <output id="cardWidthOut"></output>
           </label>
           <label class="field">
+            <span>Arka plan opaklığı</span>
+            <input type="range" id="cardOpacity" min="0.55" max="1" step="0.01" />
+            <output id="cardOpacityOut"></output>
+          </label>
+          <label class="field">
+            <span>Arka plan bulanıklığı</span>
+            <input type="range" id="cardBlur" min="0" max="40" step="1" />
+            <output id="cardBlurOut"></output>
+          </label>
+          <label class="field">
+            <span>Kapanma gecikmesi</span>
+            <input type="range" id="gracePeriod" min="0" max="1200" step="30" />
+            <output id="gracePeriodOut"></output>
+          </label>
+          <label class="field">
             <span>Yazı ölçeği</span>
             <input type="range" id="fontScale" min="0.8" max="1.6" step="0.05" />
             <output id="fontScaleOut"></output>
@@ -89,6 +104,54 @@
           <label class="check"><input type="checkbox" id="showSynonyms" /><span>Eş anlamlılar</span></label>
           <label class="check"><input type="checkbox" id="useCambridge" /><span>Cambridge sözlüğü</span></label>
         </div>
+      </section>
+
+      <section class="card">
+        <h2>Sözlük ve geçmiş</h2>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="saveOnClick" /><span>Kelimeye tıklayınca sözlüğe ekle</span></label>
+          <label class="check"><input type="checkbox" id="recordHistory" /><span>Baktığım kelimeleri geçmişe kaydet</span></label>
+          <label class="check"><input type="checkbox" id="multiSelectOnShift" /><span>Shift + tıklama ile çoklu kelime seç</span></label>
+          <label class="check"><input type="checkbox" id="translateWholeLine" /><span>Ctrl + tıklama ile tüm altyazıyı çevir</span></label>
+          <label class="check"><input type="checkbox" id="historyIgnoreCommon" /><span>the/of/and gibi kelimeleri atla</span></label>
+        </div>
+        <div class="grid" style="margin-top: 14px">
+          <label class="field">
+            <span>Geçmiş kayıt sınırı</span>
+            <input type="number" id="historyLimit" min="20" max="5000" step="20" />
+          </label>
+          <label class="field">
+            <span>En kısa kaydedilecek kelime</span>
+            <input type="number" id="historyMinLength" min="1" max="10" step="1" />
+          </label>
+        </div>
+        <div class="inline" style="margin-top: 14px">
+          <button id="openLibrary" class="primary" type="button">📖 Sözlüğümü aç</button>
+          <span id="libraryStats" class="muted">—</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Güncelleme</h2>
+        <div class="inline">
+          <span id="updateState" class="muted">—</span>
+          <button id="checkUpdate" type="button">Şimdi kontrol et</button>
+          <button id="openRelease" class="linkish" type="button" hidden>Sürüm notları</button>
+        </div>
+        <label class="check" style="margin-top: 12px">
+          <input type="checkbox" id="autoUpdateCheck" />
+          <span>Günde iki kez yeni sürüm var mı diye kontrol et</span>
+        </label>
+        <p class="hint">
+          <strong>Shift + tıkla</strong> ile altyazıdaki kelimeleri çoklu seç, <strong>S</strong>
+          tuşuyla hepsini kaydet. <strong>Ctrl + tıkla</strong> ile o anki altyazı satırının
+          tamamını çevir. <strong>Esc</strong> her şeyi kapatır.
+        </p>
+        <p class="hint">
+          Mağazadan kurulu bir paket kendini <code>update_url</code> üzerinden günceller.
+          Bu kontrol, elle (paketlenmemiş) kurulum içindir: yeni sürüm çıkınca simgede
+          <strong>NEW</strong> görünür.
+        </p>
       </section>
 
       <section class="card">

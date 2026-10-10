@@ -64,6 +64,30 @@ export const ADAPTERS = {
   }
 };
 
+/**
+ * Players that are embedded on arbitrary hosts, so they cannot be recognised by
+ * hostname. Aniwatch, HiAnime and most anime streaming sites put a JW Player
+ * inside an iframe on a third-party domain; the caption markup is the only
+ * reliable signal.
+ */
+export const PLAYER_SELECTORS = {
+  jwplayer: [
+    ".jw-text-track-cue",
+    ".jw-text-track-display",
+    ".jw-text-track-container",
+    ".jw-captions"
+  ],
+  videojs: [".vjs-text-track-cue", ".vjs-text-track-display"],
+  shaka: [".shaka-text-container", ".shaka-text-region"],
+  hlsjs: [".hlsjs-captions", "[class*='hlsjs'] [class*='caption']"],
+  fluid: [".fluid-captions", "[class*='fluid-caption']"],
+  artplayer: [".art-subtitle", "[class*='art-subtitle']"],
+  plyr: [".plyr__captions", "[class*='plyr__caption']"]
+};
+
+/** Every embedded-player selector, tried when no hostname adapter matched. */
+const ALL_PLAYER_SELECTORS = Object.values(PLAYER_SELECTORS).flat();
+
 const HOSTNAME_ADAPTERS = [
   [/^(www\.)?netflix\.com$/i, "netflix"],
   [/^(www\.|m\.|music\.)?youtube(-nocookie)?\.com$/i, "youtube"],
@@ -113,6 +137,8 @@ export class RootResolver {
     this.cache = [];
     this.cacheAt = 0;
     this.lastSignature = "";
+    /** Embedded player detected by markup, e.g. "jwplayer"; empty if none. */
+    this.playerId = "";
   }
 
   update(settings) {
@@ -153,6 +179,8 @@ export class RootResolver {
       ? querySelectorAllDeep(selector)
       : this.resolveByAdapter();
 
+    if (!this.playerId) this.playerId = this.detectPlayer();
+
     const roots = dedupeRoots(found)
       .filter((element) => !element.closest(HOST_SELECTOR))
       .filter(isUsableRoot)
@@ -178,14 +206,52 @@ export class RootResolver {
     return "";
   }
 
+  /**
+   * Detect the embedded player on this document, if any.
+   *
+   * Anime streaming sites host a third-party player inside an iframe, so the
+   * hostname says nothing about the player. Presence of its caption markup is
+   * the only signal, and this runs inside that iframe thanks to `all_frames`.
+   */
+  detectPlayer() {
+    for (const [player, selectors] of Object.entries(PLAYER_SELECTORS)) {
+      for (const selector of selectors) {
+        const found = this.deepQuery(selector);
+        if (found.length) {
+          // A container that exists but is empty is still a positive signal:
+          // captions are enabled, the current cue just has no text.
+          return player;
+        }
+      }
+    }
+    return "";
+  }
+
+  /** querySelectorAll over this document and its open shadow roots. */
+  deepQuery(selector) {
+    try {
+      return querySelectorAllDeep(selector);
+    } catch {
+      return [];
+    }
+  }
+
   resolveByAdapter() {
     const adapter = ADAPTERS[this.siteId] || ADAPTERS.generic;
     const results = [];
 
     for (const selector of adapter.container) {
-      results.push(...querySelectorAllDeep(selector));
+      results.push(...this.deepQuery(selector));
     }
     if (this.siteId !== "generic" && results.length) return results;
+
+    // Embedded players come next: they are declared by their own markup, not by
+    // the domain, and this is what covers anime streaming sites.
+    for (const selector of ALL_PLAYER_SELECTORS) {
+      const found = this.deepQuery(selector);
+      if (found.length) results.push(...found);
+    }
+    if (results.length) return results;
 
     // The heuristic only runs for unknown sites, so it can afford to be broad.
     if (adapter === ADAPTERS.generic || !results.length) {

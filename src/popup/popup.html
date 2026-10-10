@@ -38,6 +38,37 @@
         <output id="hoverDelayOut"></output>
       </label>
 
+      <label class="field">
+        <span>Kapanma gecikmesi</span>
+        <input type="range" id="gracePeriod" min="0" max="1200" step="30" />
+        <output id="gracePeriodOut"></output>
+      </label>
+
+      <fieldset class="group">
+        <legend>Kaydetme</legend>
+        <label class="check">
+          <input type="checkbox" id="saveOnClick" />
+          <span>Kelimeye tıklayınca sözlüğe ekle</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="recordHistory" />
+          <span>Baktığım kelimeleri geçmişe kaydet</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="multiSelectOnShift" />
+          <span>Shift + tıkla ile çoklu seç (S ile kaydet)</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="translateWholeLine" />
+          <span>Ctrl + tıkla ile altyazıyı çevir</span>
+        </label>
+      </fieldset>
+
+      <div class="library-row">
+        <button id="openLibrary" class="link strong" type="button">📖 Sözlüğüm</button>
+        <span id="libraryCount" class="muted"></span>
+      </div>
+
       <div class="row">
         <label class="check"><input type="checkbox" id="showPhonetic" /><span>Telaffuz</span></label>
         <label class="check"><input type="checkbox" id="showDefinitions" /><span>Tanımlar</span></label>
@@ -64,6 +95,7 @@
     <footer class="foot">
       <button id="openOptions" class="link" type="button">Tüm ayarlar</button>
       <button id="testWord" class="link" type="button">Test et</button>
+      <button id="updateBadge" class="link update" type="button" hidden></button>
     </footer>
 
     <script type="module" src="popup.js"></script>
