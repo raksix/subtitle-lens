@@ -250,7 +250,13 @@ export class HoverController {
 
     // A newer word took over while this lookup was in flight.
     if (seq !== this.openToken || requestId !== this.requestSeq) return;
+    // The pointer may have moved off the caption; the card is only rendered
+    // while it is still wanted.
     if (!this.overlay.visible && !this.overlay.pinned) return;
+    // The content script can be orphaned by an extension reload, in which case
+    // the service worker never answers.
+    if (!this.overlay.card?.isConnected) return;
+
     if (!response) {
       renderError(this.overlay.card, word, "no-response");
       this.reposition();
@@ -262,9 +268,17 @@ export class HoverController {
       return;
     }
 
-    renderResult(this.overlay.card, response.data, this.settings);
-    this.reposition();
-    this.wireCardActions(response.data, word);
+    try {
+      renderResult(this.overlay.card, response.data, this.settings);
+      this.reposition();
+      this.wireCardActions(response.data, word);
+    } catch (error) {
+      // A provider can answer with a shape the renderer does not expect. That
+      // is a bug, but it must not leave the card stuck on the spinner.
+      console.error("[SubtitleLens] render failed", error);
+      renderError(this.overlay.card, word, String(error?.message || error));
+      this.reposition();
+    }
   }
 
   reposition() {

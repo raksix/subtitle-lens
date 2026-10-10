@@ -11,7 +11,15 @@
 
 import { DEFAULT_SETTINGS } from "../common/settings.js";
 
-const GOOGLE_ENDPOINT = "https://translate.googleapis.com/translate_a/single";
+/**
+ * Google exposes the same response shape from more than one host. The primary
+ * one starts answering 429 after a burst of lookups (a normal subtitle session
+ * is exactly that burst), so the second is tried before giving up.
+ */
+const GOOGLE_ENDPOINTS = [
+  "https://translate.googleapis.com/translate_a/single",
+  "https://clients5.google.com/translate_a/single"
+];
 const MYMEMORY_ENDPOINT = "https://api.mymemory.translated.net/get";
 const FREEDICT_ENDPOINT = "https://freedictionaryapi.com/api/v1/entries/en/";
 const WIKTIONARY_ENDPOINT =
@@ -23,6 +31,13 @@ const CAMBRIDGE_UA =
   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 const CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+/**
+ * A result missing its translation is a rate limit or a transient upstream
+ * failure, not a property of the word. Caching that for 30 days would leave
+ * the word broken until the cache is cleared by hand, so incomplete results
+ * expire in a minute and get retried on the next hover.
+ */
+const PARTIAL_CACHE_TTL_MS = 60 * 1000;
 const CACHE_PREFIX = "lens:cache:";
 const CACHE_INDEX_KEY = "lens:cacheIndex";
 const MAX_CACHE_ENTRIES = 1200;
@@ -94,7 +109,8 @@ async function readCache(key) {
   const store = await chrome.storage.local.get(key);
   const entry = store[key];
   if (!entry) return null;
-  if (Date.now() - entry.at > CACHE_TTL_MS) {
+  const ttl = entry.value?.translation?.text ? CACHE_TTL_MS : PARTIAL_CACHE_TTL_MS;
+  if (Date.now() - entry.at > ttl) {
     await chrome.storage.local.remove(key);
     return null;
   }
@@ -156,24 +172,34 @@ async function handleQuery(payload) {
 
   const task = (async () => {
     const [translation, dictionary, cambridge] = await Promise.all([
-      safe(() => translate(word, sourceLang, targetLang, settings)),
-      wantsDictionary ? safe(() => lookupDictionary(word)) : null,
-      wantsCambridge
-        ? safe(() => lookupCambridge(word, targetLang, settings))
-        : null
+      attempt(() => translate(word, sourceLang, targetLang, settings)),
+      wantsDictionary ? attempt(() => lookupDictionary(word)) : idle(),
+      wantsCambridge ? attempt(() => lookupCambridge(word, targetLang, settings)) : idle()
     ]);
 
     const result = {
       word,
       targetLang,
-      sourceLang: (translation && translation.sourceLang) || sourceLang,
-      translation: translation || null,
-      dictionary: dictionary || null,
-      cambridge: cambridge || null,
+      sourceLang: translation.value?.sourceLang || sourceLang,
+      translation: translation.value,
+      dictionary: dictionary.value,
+      cambridge: cambridge.value,
+      /**
+       * Provider failures are reported separately from the data. A dictionary
+       * with no entry for "the" is not an error, but a rate limit is, and the
+       * card has to be able to say which happened.
+       */
+      errors: compact({
+        translation: translation.error,
+        dictionary: dictionary.error,
+        cambridge: cambridge.error
+      }),
       at: Date.now()
     };
 
-    if (translation || dictionary || cambridge) {
+    if (translation.value) {
+      // Only a result with a real translation is worth 30 days. Anything less
+      // is cached with a short TTL so a transient outage cannot pin a word.
       await writeCache(key, result);
     }
     return result;
@@ -209,12 +235,28 @@ function normalizeWord(value) {
   return word;
 }
 
-async function safe(fn) {
+/**
+ * Run a provider and keep its failure beside its value instead of replacing it,
+ * so the card can show whatever succeeded and name what did not.
+ */
+async function attempt(fn) {
   try {
-    return await fn();
+    return { value: await fn(), error: null };
   } catch (error) {
-    return { error: String((error && error.message) || error) };
+    return { value: null, error: String((error && error.message) || error) };
   }
+}
+
+function idle() {
+  return Promise.resolve({ value: null, error: null });
+}
+
+function compact(object) {
+  const out = {};
+  for (const [key, value] of Object.entries(object)) {
+    if (value) out[key] = value;
+  }
+  return out;
 }
 
 async function throttle(kind) {
@@ -244,6 +286,8 @@ async function fetchText(url, kind, options = {}) {
   await throttle(kind);
   const response = await fetch(url, {
     credentials: "omit",
+    // Cambridge answers 302 for inflected forms ("runs", "walking"); following
+    // it is what turns those into a result instead of an error.
     redirect: "follow",
     ...options
   });
@@ -286,8 +330,20 @@ async function translateGoogle(word, sourceLang, targetLang) {
     q: word
   });
   // dt=t main translation, dt=bd dictionary alternatives, dt=rm romanisation.
-  const url = `${GOOGLE_ENDPOINT}?${params.toString()}&dt=t&dt=bd&dt=rm`;
-  const data = await fetchJson(url, "translate");
+  const query = `${params.toString()}&dt=t&dt=bd&dt=rm`;
+
+  let lastError = null;
+  for (const endpoint of GOOGLE_ENDPOINTS) {
+    try {
+      return parseGoogleResponse(await fetchJson(`${endpoint}?${query}`, "translate"));
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("google-failed");
+}
+
+function parseGoogleResponse(data) {
   if (!Array.isArray(data) || !Array.isArray(data[0])) {
     throw new Error("google-bad-payload");
   }
@@ -297,9 +353,10 @@ async function translateGoogle(word, sourceLang, targetLang) {
     .filter(Boolean)
     .join("")
     .trim();
+  if (!text) throw new Error("google-empty");
 
-  const phoneticChunk = data[0].find((chunk) => Array.isArray(chunk) && chunk[3]);
-  const phonetic = data[0].map((c) => (Array.isArray(c) ? c[3] : null)).find(Boolean) || null;
+  const phonetic =
+    data[0].map((chunk) => (Array.isArray(chunk) ? chunk[3] : null)).find(Boolean) || null;
 
   const alternatives = [];
   if (Array.isArray(data[1])) {
@@ -313,13 +370,19 @@ async function translateGoogle(word, sourceLang, targetLang) {
 
   return {
     text,
-    phonetic: phonetic || (phoneticChunk ? phoneticChunk[3] : null),
+    phonetic,
     sourceLang: typeof data[2] === "string" ? data[2] : "auto",
     detectedLang: typeof data[2] === "string" ? data[2] : null,
     alternatives
   };
 }
 
+/**
+ * MyMemory answers `200 OK` even when it refuses the request, with the error
+ * text in `responseData.translatedText` (for example
+ * `'XX' IS AN INVALID TARGET LANGUAGE`). Without the checks below that string
+ * is rendered as if it were a translation.
+ */
 async function translateMyMemory(word, sourceLang, targetLang) {
   const source = sourceLang && sourceLang !== "auto" ? sourceLang : "en";
   const params = new URLSearchParams({
@@ -328,11 +391,25 @@ async function translateMyMemory(word, sourceLang, targetLang) {
     mt: "1"
   });
   const data = await fetchJson(`${MYMEMORY_ENDPOINT}?${params.toString()}`, "translate");
+
+  const status = Number(data?.responseStatus);
+  if (Number.isFinite(status) && status >= 400) {
+    throw new Error(`mymemory-${status}`);
+  }
+
   const text =
     data && data.responseData && typeof data.responseData.translatedText === "string"
       ? data.responseData.translatedText.trim()
       : "";
   if (!text) throw new Error("mymemory-empty");
+  // Service messages are shouted and often wrapped in quotes.
+  if (/INVALID|QUOTA|EXAMPLE:|MYMEMORY WARNING|_QUERY LENGTH LIMIT/i.test(text)) {
+    throw new Error("mymemory-message");
+  }
+  if (text.length > 3 && text.startsWith("'") && text.endsWith("'") && /[A-Z]{3}/.test(text)) {
+    throw new Error("mymemory-message");
+  }
+
   return { text, phonetic: null, sourceLang: source, alternatives: [] };
 }
 
@@ -341,13 +418,22 @@ async function translateMyMemory(word, sourceLang, targetLang) {
 /* ------------------------------------------------------------------ */
 
 async function lookupDictionary(word) {
-  const entries = await freeDictionaryEntries(word);
-  if (entries && entries.length) return { source: "freedictionaryapi", entries };
+  // Each source is independent: a 403 or a rate limit on the first must not
+  // skip the second, and only a total failure is an error worth reporting.
+  const primary = await attempt(() => freeDictionaryEntries(word));
+  if (primary.value && primary.value.length) {
+    return { source: "freedictionaryapi", entries: primary.value };
+  }
 
-  const fallback = await wiktionaryEntries(word);
-  if (fallback && fallback.length) return { source: "wiktionary", entries: fallback };
+  const fallback = await attempt(() => wiktionaryEntries(word));
+  if (fallback.value && fallback.value.length) {
+    return { source: "wiktionary", entries: fallback.value };
+  }
 
-  return null;
+  if (primary.error && fallback.error) {
+    throw new Error(`${primary.error}; ${fallback.error}`);
+  }
+  return null; // both sources answered, neither knows the word
 }
 
 async function freeDictionaryEntries(word) {

@@ -258,6 +258,10 @@ function buildMarkup() {
   .lens-syn { font-size: 0.92em; color: var(--muted); word-break: break-word; }
 
   .lens-status { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  .lens-partial {
+    border-top: 1px solid var(--border); padding-top: 7px;
+    font-size: 0.86em; color: var(--muted);
+  }
   .lens-spinner {
     width: 13px; height: 13px; border-radius: 50%;
     border: 2px solid var(--border); border-top-color: var(--accent);
@@ -320,12 +324,19 @@ export function renderResult(card, data, settings) {
   const dict = data.dictionary;
   const cambridge = data.cambridge;
   const translation = data.translation;
+  const errors = data.errors || {};
 
+  // Every section is optional: a provider can answer with a shape that is
+  // missing the fields another provider always sets, and a render that throws
+  // would leave the card stuck on the loading state forever.
+  const dictEntry = Array.isArray(dict?.entries)
+    ? dict.entries.find((entry) => entry?.pronunciations?.length)
+    : null;
+  const cambridgePhonetic = cambridge?.pronunciations?.[0];
   const phonetic =
-    (dict && dict.entries.find((entry) => entry.pronunciations.length)
-      ?.pronunciations[0]?.text) ||
-    (cambridge && cambridge.pronunciations[0] ? `/${cambridge.pronunciations[0]}/` : "") ||
-    (translation && translation.phonetic ? `/${translation.phonetic}/` : "");
+    dictEntry?.pronunciations?.[0]?.text ||
+    (cambridgePhonetic ? `/${cambridgePhonetic}/` : "") ||
+    (translation?.phonetic ? `/${translation.phonetic}/` : "");
 
   const head = el("div", { class: "lens-head" }, el("span", { class: "lens-word" }, data.word));
   if (settings.showPhonetic !== false && phonetic) {
@@ -367,11 +378,11 @@ export function renderResult(card, data, settings) {
     }
   }
 
-  if (settings.showDefinitions !== false && dict && dict.entries.length) {
+  if (settings.showDefinitions !== false && Array.isArray(dict?.entries) && dict.entries.length) {
     const body = el("div", {});
     let count = 0;
     for (const entry of dict.entries) {
-      for (const sense of entry.senses) {
+      for (const sense of entry.senses || []) {
         if (count >= (settings.maxDefinitions || 4)) break;
         count += 1;
         const item = el(
@@ -384,7 +395,7 @@ export function renderResult(card, data, settings) {
             sense.definition
           )
         );
-        if (settings.showExamples !== false && sense.examples.length) {
+        if (settings.showExamples !== false && sense.examples?.length) {
           item.append(el("div", { class: "lens-example" }, sense.examples[0]));
         }
         body.append(item);
@@ -398,7 +409,7 @@ export function renderResult(card, data, settings) {
     }
   }
 
-  if (settings.useCambridge !== false && cambridge && cambridge.senses.length) {
+  if (settings.useCambridge !== false && Array.isArray(cambridge?.senses) && cambridge.senses.length) {
     const body = el("div", {});
     const limit = Math.max(2, Math.min(settings.maxDefinitions || 4, 5));
     for (const sense of cambridge.senses.slice(0, limit)) {
@@ -422,7 +433,7 @@ export function renderResult(card, data, settings) {
           )
         );
       }
-      if (settings.showExamples !== false && sense.examples.length) {
+      if (settings.showExamples !== false && sense.examples?.length) {
         item.append(el("div", { class: "lens-example" }, sense.examples[0]));
       }
       body.append(item);
@@ -433,7 +444,9 @@ export function renderResult(card, data, settings) {
   }
 
   if (settings.showSynonyms && dict) {
-    const synonyms = dict.entries.flatMap((entry) => entry.synonyms).slice(0, 12);
+    const synonyms = dict.entries
+      .flatMap((entry) => entry.synonyms || [])
+      .slice(0, 12);
     if (synonyms.length) {
       nodes.push(
         section(
@@ -444,9 +457,29 @@ export function renderResult(card, data, settings) {
     }
   }
 
-  if (!translation?.text && !dict && !cambridge) {
+  const hasAnything = Boolean(translation?.text || dict || cambridge);
+
+  if (!hasAnything) {
+    const failed = Object.keys(errors);
     nodes.push(
-      el("div", { class: "lens-section lens-status" }, "Bu kelime için sonuç bulunamadı.")
+      el(
+        "div",
+        { class: "lens-section lens-status" },
+        failed.length
+          ? el("span", { class: "lens-error" }, explainFailures(failed, errors))
+          : "Bu kelime için sonuç bulunamadı."
+      )
+    );
+  } else if (Object.keys(errors).length) {
+    // Something worked and something did not: say so instead of silently
+    // showing a partial card that looks like the whole answer.
+    const failed = Object.keys(errors);
+    nodes.push(
+      el(
+        "div",
+        { class: "lens-section lens-partial" },
+        el("span", { class: "lens-error" }, explainFailures(failed, errors))
+      )
     );
   }
 
@@ -478,14 +511,50 @@ function section(title, body) {
   );
 }
 
+const SOURCE_NAMES = {
+  translation: "çeviri",
+  dictionary: "sözlük",
+  cambridge: "Cambridge"
+};
+
+/**
+ * Turn provider errors into one sentence that names what failed and, when the
+ * cause is known, what to do about it.
+ */
+function explainFailures(failed, errors) {
+  const names = failed.map((key) => SOURCE_NAMES[key] || key);
+  const joined =
+    names.length > 1 ? `${names.slice(0, -1).join(", ")} ve ${names.at(-1)}` : names[0];
+  const all = failed.map((key) => String(errors[key] || "")).join(" ");
+
+  if (/429|rate|too many/i.test(all)) {
+    return `${joined} şu an sınırda (çok fazla istek). Birkaç saniye sonra tekrar deneyin.`;
+  }
+  if (/HTTP 5\d\d|522|503|502|504/.test(all)) {
+    return `${joined} servisine ulaşılamadı. Birazdan tekrar deneyin.`;
+  }
+  if (/Failed to fetch|NetworkError|network/i.test(all)) {
+    return `${joined} için ağ hatası. İnternet bağlantınızı kontrol edin.`;
+  }
+  if (/word-too-long/.test(all)) return "Kelime çok uzun.";
+  if (/not-a-word/.test(all)) return "Bu bir kelime değil.";
+  return `${joined} sonucu alınamadı.`;
+}
+
 function humanizeError(message) {
   const text = String(message || "");
   if (text.includes("not-a-word")) return "Bu bir kelime değil.";
   if (text.includes("word-too-long")) return "Kelime çok uzun.";
-  if (text.includes("HTTP 429")) return "Çok fazla istek gönderildi, biraz bekleyin.";
-  if (text.includes("Failed to fetch") || text.includes("NetworkError")) {
+  if (text.includes("HTTP 429") || /rate|too many/i.test(text)) {
+    return "Çok fazla istek gönderildi, birkaç saniye sonra tekrar deneyin.";
+  }
+  if (/context invalidated|Receiving end does not exist|message port closed/i.test(text)) {
+    return "Eklenti güncellendi. Sayfayı yenileyin (F5) ve tekrar deneyin.";
+  }
+  if (/Failed to fetch|NetworkError|network/i.test(text)) {
     return "Ağ hatası: internet bağlantınızı kontrol edin.";
   }
+  if (/HTTP 5\d\d/.test(text)) return "Sağlayıcıya ulaşılamadı, birazdan tekrar deneyin.";
   return `Sonuç alınamadı (${text || "bilinmeyen hata"}).`;
 }
 

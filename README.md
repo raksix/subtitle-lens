@@ -133,11 +133,39 @@ A content script cannot be an ES module, so `src/content/*` is flattened by
 `bun build.mjs` into `dist/src/content.js`. Everything else is loaded by Chrome
 as a real ES module and copied unchanged.
 
+## When a lookup fails
+
+The providers are free public endpoints, so failures are a normal condition
+rather than an edge case. Three rules keep them from turning into a broken word:
+
+- **Rate limits fall through instead of giving up.** Google's endpoint starts
+  answering `429` after a burst of lookups, which is exactly what a subtitle
+  session is. A second Google host is tried before MyMemory, and only a total
+  failure is reported.
+- **A refusal is not a translation.** MyMemory answers `200 OK` with the error
+  text inside `responseData.translatedText` (`'XX' IS AN INVALID TARGET
+  LANGUAGE`). That string is detected and rejected instead of being rendered as
+  if it were the answer.
+- **A partial answer is never cached as a whole one.** A result without a
+  translation is either rate limited or transient, so it is kept for one minute
+  and retried, not for the full 30 days. Otherwise a single `429` would pin the
+  word for a month.
+
+The card names what failed, in Turkish, without leaking a provider status code:
+
+| Situation | What the card shows |
+| --- | --- |
+| Translation rate limited | `çeviri şu an sınırda (çok fazla istek). Birkaç saniye sonra tekrar deneyin.` |
+| Translation fine, dictionary rate limited | the translation, then `sözlük sonucu alınamadı.` |
+| Nothing found at all | `Bu kelime için sonuç bulunamadı.` |
+| Extension reloaded under a live page | `Eklenti güncellendi. Sayfayı yenileyin (F5) ve tekrar deneyin.` |
+
 ## Development
 
 ```bash
 bun build.mjs                             # bundle dist/
 bun run check                             # parse every source file
+bun run test:providers                    # provider failure modes, no browser needed
 bun test/serve.mjs 8123                   # serve the repo (demo player at /test/demo.html)
 ```
 
@@ -147,15 +175,16 @@ End-to-end, in two more terminals:
 powershell -File test/launch-chrome.ps1   # Chrome with CDP on :9222
 bun test/verify.mjs                       # hover, translate, dismiss — 19 checks
 bun test/check-pages.mjs                  # popup, options, service worker — 8 checks
+bun test/verify-ui-errors.mjs             # card wording on failures — 8 checks
 ```
 
 `test/run-e2e.ps1` does the whole chain: build, restart Chrome on a clean
 profile, install the extension over CDP, verify.
 
-Two things make the harness work, and both matter if you touch it:
+Three things make the harness work, and all of them matter if you touch it:
 
 - **`--load-extension` is dead.** Branded Chrome builds ignore it since Chrome
-  137. `test/verify.mjs` installs `dist/` with the CDP `Extensions.loadUnpacked`
+  137. The harness installs `dist/` with the CDP `Extensions.loadUnpacked`
   command instead, which requires `--enable-unsafe-extension-debugging`. The
   consequence: an unpacked extension is never reloaded from disk, so **every
   rebuild needs a fresh browser** — which is why `run-e2e.ps1` wipes the profile.
@@ -163,6 +192,10 @@ Two things make the harness work, and both matter if you touch it:
   frame-driven, so a background tab would never process a pointer move. The
   harness calls `Emulation.setFocusEmulationEnabled`, matching the state a real
   visible tab is in.
+- **The service worker needs `Target.attachToTarget` with `flatten: true`.**
+  Its `/json/list` entry has no websocket URL, and target ids there go stale
+  when the worker is suspended. Take the id from `Target.getTargets` and attach
+  immediately.
 
 `test/demo.html` reproduces the two hostile behaviours that matter: the caption
 layer is `pointer-events: none` **and** the cue DOM is rebuilt every 2.5 s. It
@@ -173,11 +206,18 @@ The assertions read the card through `DOM.getDocument { pierce: true }` because
 the overlay lives in a closed shadow root: invisible to page scripts, visible to
 CDP.
 
+`test/providers.test.mjs` needs none of that. It runs the service worker as a
+plain module with a stubbed `chrome` and a scripted `fetch`, which is how the
+failure paths stay deterministic: no rate limits, no network, no browser.
+
 ## Verified behaviour
 
-`test/verify.mjs` and `test/check-pages.mjs` run against a live Chrome 155 with
-the extension installed from `dist/`. Latest run: **19/19** on the hover path,
-**8/8** on the UI surfaces and service worker.
+| Suite | Scope | Result |
+| --- | --- | --- |
+| `providers.test.mjs` | 429 fallback, service messages, cache rules, Cambridge parsing, input hygiene | **19/19** |
+| `verify.mjs` | hover on a `pointer-events: none` layer in a real Chrome 155 | **19/19** |
+| `check-pages.mjs` | popup, options, service worker | **8/8** |
+| `verify-ui-errors.mjs` | what the card says when providers fail | **8/8** |
 
 What the hover run asserts on `test/demo.html`:
 
