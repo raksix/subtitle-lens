@@ -73,6 +73,12 @@ Aniwatch, HiAnime and most of that family serve **JW Player**, whose captions ar
 `.jw-text-track-cue`. Also covered: video.js (`.vjs-text-track-cue`), Shaka
 Player, hls.js, Fluid Player, ArtPlayer and Plyr.
 
+<img src="docs/aniwatch-jwplayer.png" alt="Hovering the word 'There' in a JW Player caption on Aniwatch: the card shows /ðeə/, Orada, and the Cambridge EN→TR entry" width="720">
+
+That is a real hover on a live Aniwatch stream: the frame recognises the player
+as `jwplayer`, the hover resolves `There` inside the running cue, and the card
+renders the translation, the phonetic and the Cambridge entry.
+
 On unknown sites a heuristic looks for `[class*="caption"]`,
 `[class*="subtitle"]`, `[role="caption"]` and similar containers in the lower
 part of the viewport, where subtitles actually are.
@@ -303,7 +309,7 @@ What the browser runs actually assert:
 | Click to save | `0 → 1: station`, with translation `istasyon` and the cue as context |
 | Shift + click | `["children"]` → `["children","station"]` → save writes both |
 | Ctrl + click | `Çocuklar tren kalkmadan önce istasyona koşmak zorunda kaldılar.` |
-| Aniwatch / JW Player | player recognised as `jwplayer` inside the iframe; hover resolves `There` in the live cue |
+| Aniwatch / JW Player | player recognised as `jwplayer` inside the frame; hover on the live stream returned `There /ðeə/ EN Orada Google` with the Cambridge EN→TR entry |
 | Card survives a cue rewrite | word replaced under the card, card intact |
 | Second lookup | served with the `cached` badge |
 
