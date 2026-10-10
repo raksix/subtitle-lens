@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SubtitleLens</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <span class="logo">SL</span>
+      <div>
+        <h1>SubtitleLens</h1>
+        <p id="site-line" class="muted">—</p>
+      </div>
+      <label class="switch" title="Bu sekmede aç/kapa">
+        <input type="checkbox" id="enabled" />
+        <span></span>
+      </label>
+    </header>
+
+    <section class="panel">
+      <label class="field">
+        <span>Çeviri dili</span>
+        <select id="targetLang"></select>
+      </label>
+
+      <label class="field">
+        <span>Kaynak dil</span>
+        <select id="sourceLang">
+          <option value="auto">Otomatik algıla</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Bekleme süresi</span>
+        <input type="range" id="hoverDelay" min="0" max="600" step="20" />
+        <output id="hoverDelayOut"></output>
+      </label>
+
+      <div class="row">
+        <label class="check"><input type="checkbox" id="showPhonetic" /><span>Telaffuz</span></label>
+        <label class="check"><input type="checkbox" id="showDefinitions" /><span>Tanımlar</span></label>
+        <label class="check"><input type="checkbox" id="showExamples" /><span>Örnekler</span></label>
+        <label class="check"><input type="checkbox" id="useCambridge" /><span>Cambridge</span></label>
+      </div>
+
+      <details class="advanced">
+        <summary>Bu site için gelişmiş</summary>
+        <label class="field">
+          <span>Altyazı CSS seçicisi</span>
+          <input type="text" id="siteSelector" placeholder="örn. .player-timedtext" />
+        </label>
+        <p class="hint" id="site-hint"></p>
+        <div class="row">
+          <label class="check">
+            <input type="checkbox" id="siteDisabled" />
+            <span>Bu sitede kapalı</span>
+          </label>
+        </div>
+      </details>
+    </section>
+
+    <footer class="foot">
+      <button id="openOptions" class="link" type="button">Tüm ayarlar</button>
+      <button id="testWord" class="link" type="button">Test et</button>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

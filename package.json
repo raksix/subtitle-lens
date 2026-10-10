@@ -1,0 +1,23 @@
+{
+  "name": "subtitle-lens",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Hover any word in video subtitles to get translation, IPA and Cambridge definitions.",
+  "scripts": {
+    "build": "bun build.mjs",
+    "check": "bun run scripts/check.mjs",
+    "serve": "bun test/serve.mjs 8123",
+    "chrome": "powershell -NoProfile -ExecutionPolicy Bypass -File test/launch-chrome.ps1",
+    "verify": "bun test/verify.mjs",
+    "verify:pages": "bun test/check-pages.mjs",
+    "e2e": "powershell -NoProfile -ExecutionPolicy Bypass -File test/run-e2e.ps1"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268"
+  },
+  "license": "MIT"
+}

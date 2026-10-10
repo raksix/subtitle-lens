@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "SubtitleLens",
+  "version": "1.0.0",
+  "description": "Hover any word in video subtitles on Netflix, YouTube, Prime Video or any site to get instant translation, IPA and Cambridge dictionary definitions.",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage", "unlimitedStorage"],
+  "host_permissions": [
+    "https://translate.googleapis.com/*",
+    "https://api.mymemory.translated.net/*",
+    "https://freedictionaryapi.com/*",
+    "https://*.wiktionary.org/*",
+    "https://dictionary.cambridge.org/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": false
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "SubtitleLens"
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

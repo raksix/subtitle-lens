@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SubtitleLens · test player</title>
+    <style>
+      body {
+        margin: 0;
+        background: #0b0b0f;
+        color: #eee;
+        font: 14px/1.5 system-ui, sans-serif;
+        height: 100vh;
+        overflow: hidden;
+      }
+      video {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        object-fit: cover;
+        background: #101018;
+      }
+      /* Netflix-shaped subtitle layer: absolutely positioned, no pointer events,
+         and rewritten on every cue change. */
+      .player-timedtext {
+        position: absolute;
+        inset: auto 0 8% 0;
+        text-align: center;
+        pointer-events: none;
+        z-index: 10;
+      }
+      .player-timedtext-text-container {
+        display: inline-block;
+        max-width: 80%;
+        background: rgba(0, 0, 0, 0.72);
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 27px;
+        line-height: 1.28;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+      }
+      .hud {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        z-index: 20;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 12px;
+        max-width: 320px;
+      }
+      .hud code { color: #ffd666; }
+      #cues { color: #9aa4bb; }
+    </style>
+  </head>
+  <body>
+    <video id="video" muted autoplay loop playsinline></video>
+
+    <div class="player-timedtext">
+      <div class="player-timedtext-text-container" id="cue"></div>
+    </div>
+
+    <div class="hud">
+      <strong>SubtitleLens test player</strong>
+      <p style="margin: 6px 0 4px">
+        Altyazı katmanı <code>pointer-events: none</code> ve her 2.5 saniyede
+        yeniden yazılıyor. Kelimenin üzerine gelin.
+      </p>
+      <div>Cue: <span id="cueindex">1</span> / <span id="cuetotal">1</span></div>
+      <div id="cues"></div>
+      <div style="margin-top: 6px">Hover: <span id="hover">—</span></div>
+    </div>
+
+    <script>
+      const CUES = [
+        'The children had to run to the station before the train left.',
+        "She runs her own restaurant, and she doesn't want to sell it.",
+        'Would you run to the post office and get me some stamps?',
+        'He can run a mile in five minutes, which is remarkable.',
+        'They ran away when I tried to pick them up yesterday.'
+      ];
+
+      const cue = document.getElementById('cue');
+      const indexLabel = document.getElementById('cueindex');
+      const totalLabel = document.getElementById('cuetotal');
+      const listLabel = document.getElementById('cues');
+      const hoverLabel = document.getElementById('hover');
+
+      totalLabel.textContent = String(CUES.length);
+      listLabel.textContent = CUES.map((_, i) => i + 1).join(' · ');
+
+      let index = 0;
+      let paused = false;
+      function renderCue() {
+        // Netflix replaces the inner spans on every cue change.
+        const container = document.getElementById('cue');
+        container.replaceChildren(
+          ...CUES[index]
+            .split(' ')
+            .map((word) => {
+              const span = document.createElement('span');
+              span.textContent = word + ' ';
+              return span;
+            })
+        );
+        indexLabel.textContent = String(index + 1);
+      }
+
+      renderCue();
+      const rotation = setInterval(() => {
+        if (paused) return;
+        index = (index + 1) % CUES.length;
+        renderCue();
+      }, 2500);
+
+      // Test hook: the automated check freezes rotation so a hover target stays
+      // put, then resumes it to prove the card survives a cue rewrite.
+      window.__lensTest = {
+        pause: () => {
+          paused = true;
+          return index;
+        },
+        resume: () => {
+          paused = false;
+        },
+        /** Jump to a specific cue; index 0 is the one containing "run". */
+        seek: (target) => {
+          index = ((target % CUES.length) + CUES.length) % CUES.length;
+          renderCue();
+          return index;
+        },
+        next: () => {
+          index = (index + 1) % CUES.length;
+          renderCue();
+          return index;
+        },
+        cueIndex: () => index,
+        cueText: () => CUES[index],
+        /** Centre point of the first occurrence of `word` in the live cue. */
+        wordPoint: (word) => {
+          const spans = [...document.querySelectorAll('.player-timedtext-text-container span')];
+          const span = spans.find((node) => node.textContent.trim().toLowerCase() === word.toLowerCase());
+          if (!span) return null;
+          const rect = span.getBoundingClientRect();
+          return {
+            word: span.textContent.trim(),
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+            box: { x: rect.left, y: rect.top, w: rect.width, h: rect.height }
+          };
+        },
+        firstWordPoint: (index = 1) => {
+          const spans = [...document.querySelectorAll('.player-timedtext-text-container span')];
+          const span = spans[index] || spans[0];
+          if (!span) return null;
+          const rect = span.getBoundingClientRect();
+          return {
+            word: span.textContent.trim(),
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+            box: { x: rect.left, y: rect.top, w: rect.width, h: rect.height }
+          };
+        }
+      };
+
+      // Observability for the automated check.
+      document.addEventListener(
+        'pointermove',
+        (event) => {
+          hoverLabel.textContent = `${Math.round(event.clientX)},${Math.round(
+            event.clientY
+          )} → target=${event.target.id || event.target.className || event.target.tagName}`;
+        },
+        true
+      );
+
+      const video = document.getElementById('video');
+      // A tiny generated clip keeps the layout realistic without a network fetch.
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#1b2030';
+      ctx.fillRect(0, 0, 64, 64);
+      video.poster = canvas.toDataURL();
+    </script>
+  </body>
+</html>

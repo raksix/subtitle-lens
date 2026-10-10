@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SubtitleLens · Ayarlar</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="logo">SL</span>
+        <div>
+          <h1>SubtitleLens Ayarları</h1>
+          <p class="muted">
+            Altyazı kelimelerinin üzerine gelin: çeviri, telaffuz ve sözlük tanımları
+            anında görünür.
+          </p>
+        </div>
+      </header>
+
+      <section class="card">
+        <h2>Çeviri</h2>
+        <div class="grid">
+          <label class="field">
+            <span>Hedef dil</span>
+            <select id="targetLang"></select>
+          </label>
+          <label class="field">
+            <span>Kaynak dil</span>
+            <select id="sourceLang"></select>
+          </label>
+          <label class="field">
+            <span>Çeviri sağlayıcısı</span>
+            <select id="provider">
+              <option value="auto">Otomatik (Google → MyMemory)</option>
+              <option value="google">Yalnızca Google</option>
+              <option value="mymemory">Yalnızca MyMemory</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Cambridge sözlük dili</span>
+            <select id="cambridgeLangMode">
+              <option value="auto">Otomatik (TR ise EN→TR)</option>
+              <option value="en-tr">English → Türkçe</option>
+              <option value="en">Yalnızca English</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Görünüm ve davranış</h2>
+        <div class="grid">
+          <label class="field">
+            <span>Tema</span>
+            <select id="theme">
+              <option value="dark">Koyu</option>
+              <option value="light">Açık</option>
+              <option value="auto">Sistem</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Kart genişliği</span>
+            <input type="range" id="cardWidth" min="280" max="560" step="10" />
+            <output id="cardWidthOut"></output>
+          </label>
+          <label class="field">
+            <span>Yazı ölçeği</span>
+            <input type="range" id="fontScale" min="0.8" max="1.6" step="0.05" />
+            <output id="fontScaleOut"></output>
+          </label>
+          <label class="field">
+            <span>Hover gecikmesi</span>
+            <input type="range" id="hoverDelay" min="0" max="600" step="20" />
+            <output id="hoverDelayOut"></output>
+          </label>
+          <label class="field">
+            <span>En fazla tanım</span>
+            <input type="number" id="maxDefinitions" min="1" max="8" step="1" />
+          </label>
+        </div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="enabled" /><span>Eklenti açık</span></label>
+          <label class="check"><input type="checkbox" id="showPhonetic" /><span>Telaffuz (IPA)</span></label>
+          <label class="check"><input type="checkbox" id="showDefinitions" /><span>İngilizce tanımlar</span></label>
+          <label class="check"><input type="checkbox" id="showExamples" /><span>Örnek cümleler</span></label>
+          <label class="check"><input type="checkbox" id="showGoogleAlternatives" /><span>Alternatif çeviriler</span></label>
+          <label class="check"><input type="checkbox" id="showSynonyms" /><span>Eş anlamlılar</span></label>
+          <label class="check"><input type="checkbox" id="useCambridge" /><span>Cambridge sözlüğü</span></label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Gelişmiş</h2>
+        <label class="field wide">
+          <span>Genel altyazı CSS seçicisi (tüm siteler)</span>
+          <input type="text" id="customSelector" placeholder="örn. .caption-window, [class*='subtitle']" />
+        </label>
+        <label class="check">
+          <input type="checkbox" id="globalSelectorOverride" />
+          <span>Siteye özel seçici yerine her zaman bu seçiciyi kullan</span>
+        </label>
+        <p class="hint">
+          Siteye özel seçiciler popup içindeki “Bu site için gelişmiş” bölümünden
+          ayarlanır. Netflix için yerleşik seçici <code>.player-timedtext</code>.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>Önbellek</h2>
+        <div class="inline">
+          <span id="cacheCount" class="muted">—</span>
+          <button id="clearCache" class="danger" type="button">Önbelleği temizle</button>
+          <span id="cacheStatus" class="muted"></span>
+        </div>
+      </section>
+
+      <footer class="muted">
+        Sözlük verileri: Cambridge Dictionary, Free Dictionary API, Wiktionary.
+        Çeviri: Google Translate (genel uç nokta) ve MyMemory.
+      </footer>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
